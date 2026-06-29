@@ -155,10 +155,12 @@ else:
 
     # SE O MOTORISTA TEM CRÉDITOS
     else:
-        uploaded_file = st.file_uploader("Selecione o arquivo baixado do SPX TN (.csv)", type=["csv"])
+        # 1. Aqui você mudou certo! Aceita o arquivo .xlsx do Excel
+        uploaded_file = st.file_uploader("Selecione o arquivo baixado do SPX TN (.xlsx)", type=["xlsx"])
         
         if uploaded_file is not None:
-            df = pd.read_csv(uploaded_file, keep_default_na=False)
+            # CORREÇÃO 1: O comando correto do Python é read_excel
+            df = pd.read_excel(uploaded_file, keep_default_na=False)
             
             if "Sequence" in df.columns:
                 df = df[df['Sequence'] != '-']
@@ -189,6 +191,8 @@ else:
                 df = df.drop(columns=['Chave_Endereco'])
             
             st.success("✨ Seu arquivo foi corrigido e as paradas foram individualizadas por casa!")
+            
+            # CORREÇÃO 2: Mantemos a saída em .csv estruturado para o Circuit aceitar perfeito e sem erros de formatação
             csv_corrigido = df.to_csv(index=False).encode('utf-8')
             
             if st.download_button(
