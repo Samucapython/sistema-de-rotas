@@ -6,14 +6,17 @@ import re
 import time
 
 # =========================================================================
-# CONFIGURAÇÕES IMPORTANTES (Cole suas chaves aqui dentro das aspas)
+# CONFIGURAÇÕES IMPORTANTES
 # =========================================================================
 ID_DO_ARQUIVO_DRIVE = "1bu7iGpJmejm2Trb0zczN-QqT40cMnIh3"
 MERCADOPAGO_ACCESS_TOKEN = "APP_USR-6320983636172829-062820-7a079da945b82c5ed49e45f4d5be70dd-169568315"
 
+# 📋 COLE AQUI O LINK COMPLETO QUE VOCÊ COPIOU DO GOOGLE APPS SCRIPT
+URL_SALVAR_DRIVE = "https://script.google.com/macros/s/AKfycbxnp5XBcUb3eWgY4gMgVjYsRvdnDVk5PJdtQchlF9a9flfWzAc05Zmgjtn-vtIfblCQsw/exec"
+
 URL_DOWNLOAD = f"https://docs.google.com/uc?export=download&id={ID_DO_ARQUIVO_DRIVE}"
 
-# Funções do Banco de Dados (Google Drive)
+# Funções do Banco de Dados Atualizadas
 def carregar_usuarios():
     try:
         resposta = requests.get(URL_DOWNLOAD)
@@ -26,6 +29,11 @@ def carregar_usuarios():
 
 def salvar_usuarios(dados):
     st.session_state.banco_usuarios = dados
+    # Envia os dados novos em tempo real para o Google Drive salvar de verdade
+    try:
+        requests.post(URL_SALVAR_DRIVE, data=json.dumps(dados))
+    except:
+        pass
 
 # Inicializar variáveis na memória do navegador do motorista
 if "logado" not in st.session_state:
