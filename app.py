@@ -69,7 +69,7 @@ if not st.session_state.logado:
             elif "@" not in novo_email:
                 st.error("Por favor, digite um e-mail válido.")
             else:
-                usuarios[novo_email] = {"senha": nova_senha, "creditos": 0}
+                usuarios[novo_email] = {"senha": nova_senha, "creditos": 2}
                 salvar_usuarios(usuarios)
                 st.success("🎉 Conta criada com sucesso! Mude para a aba 'Fazer Login'.")
 
@@ -93,9 +93,9 @@ else:
     # SE O MOTORISTA NÃO TEM CRÉDITOS
     if creditos_atuais <= 0:
         st.warning("⚠️ Você não possui créditos para processar novas rotas.")
-        st.subheader("Adquira 1 Crédito por R$ 2,00 via PIX")
+        st.subheader("Adquira 1 Crédito por R$ 12,00 via PIX")
         
-        if st.button("🏷️ Gerar PIX de R$ 2,00"):
+        if st.button("🏷️ Gerar PIX de R$ 12,00"):
             url_mp = "https://api.mercadopago.com/v1/payments"
             
             # Gerando chave única de idempotência com base no e-mail e tempo atual
@@ -111,7 +111,7 @@ else:
             email_valido_mp = email_usuario if "@" in email_usuario else f"{email_usuario}@email.com"
             
             dados_pagamento = {
-                "transaction_amount": 2.00,
+                "transaction_amount": 12.00,
                 "description": f"Credito Rota - {email_usuario}",
                 "payment_method_id": "pix",
                 "payer": {
