@@ -17,12 +17,10 @@ URL_DOWNLOAD = f"https://docs.google.com/uc?export=download&id={ID_DO_ARQUIVO_DR
 # Funções do Banco de Dados Adaptadas para Estrutura Dupla (Usuários + Bloqueados)
 def carregar_banco():
     try:
-        # Adiciona um marcador de tempo único no final do link para forçar o Drive a ignorar o cache antigo
         url_sem_cache = f"{URL_DOWNLOAD}&nocache={int(time.time())}"
         resposta = requests.get(url_sem_cache)
         if resposta.status_code == 200:
             dados = json.loads(resposta.text)
-            # Garante que o banco migre para a estrutura de chaves sem quebrar os dados existentes
             if "usuarios" not in dados:
                 dados = {"usuarios": dados, "motoristas_bloqueados": []}
             return dados
@@ -55,40 +53,54 @@ if not st.session_state.logado:
     aba1, aba2 = st.tabs(["Fazer Login", "Criar Nova Conta"])
     
     with aba1:
-        email = st.text_input("E-mail para Login")
+        usuario_input = st.text_input("E-mail ou Telefone (com DDD)")
         senha = st.text_input("Senha para Login", type="password")
         if st.button("Entrar"):
-            if email in usuarios and usuarios[email]["senha"] == senha:
+            # Limpa o input caso o usuário coloque traços ou espaços no telefone
+            usuario_limpo = usuario_input.strip()
+            if usuario_limpo in usuarios and usuarios[usuario_limpo]["senha"] == senha:
                 st.session_state.logado = True
-                st.session_state.usuario_atual = email
+                st.session_state.usuario_atual = usuario_limpo
                 st.rerun()
             else:
-                st.error("E-mail ou senha incorretos.")
+                st.error("Dados de acesso incorretos.")
                 
     with aba2:
-        novo_email = st.text_input("Seu melhor E-mail")
+        opcao_cadastro = st.radio("Como deseja se cadastrar?", ["Usar Telefone/WhatsApp", "Usar E-mail"])
+        
+        if opcao_cadastro == "Usar Telefone/WhatsApp":
+            novo_usuario = st.text_input("Digite seu Telefone com DDD (ex: 11999998888)")
+        else:
+            novo_usuario = st.text_input("Digite seu melhor E-mail")
+            
         nova_senha = st.text_input("Crie uma Senha", type="password")
+        
         if st.button("Cadastrar Conta"):
-            if novo_email in usuarios:
-                st.error("Este e-mail já está cadastrado.")
-            elif "@" not in novo_email:
+            usuario_final = novo_usuario.strip()
+            
+            if not usuario_final or len(nova_senha) < 3:
+                st.error("Por favor, preencha os dados corretamente.")
+            elif usuario_final in usuarios:
+                st.error("Este e-mail ou telefone já está cadastrado.")
+            elif opcao_cadastro == "Usar E-mail" and "@" not in usuario_final:
                 st.error("Por favor, digite um e-mail válido.")
+            elif opcao_cadastro == "Usar Telefone/WhatsApp" and not usuario_final.isdigit():
+                st.error("Por favor, digite apenas números no campo de telefone.")
             else:
-                # Cria o usuário com 2 créditos de bônus e registra o histórico de pagamentos (total_pago)
-                usuarios[novo_email] = {"senha": nova_senha, "creditos": 2, "total_pago": 0}
+                # Salva o usuário no formato unificado
+                usuarios[usuario_final] = {"senha": nova_senha, "creditos": 2, "total_pago": 0}
                 banco["usuarios"] = usuarios
                 salvar_banco(banco)
-                st.success("🎉 Conta criada com sucesso! Mude para a aba 'Fazer Login'.")
+                st.success("🎉 Conta criada com sucesso! Vá para a aba 'Fazer Login'.")
 
 # ----------------- TELA DO SISTEMA (MOTORISTA LOGADO) -----------------
 else:
     email_usuario = st.session_state.usuario_atual
     creditos_atuais = usuarios[email_usuario]["creditos"]
-    # Proteção para não quebrar contas antigas de teste criadas sem o campo total_pago
     total_pago = usuarios[email_usuario].get("total_pago", 0)
     
     st.title("🚗 Corretor de Rotas SPX TN")
-    st.write(f"Motorista: **{email_usuario}**")
+    st.write(f"Conectado como: **{email_usuario}**")
     st.metric(label="Suas Rotas Disponíveis", value=f"🪙 {creditos_atuais}")
 
     if st.button("🚪 Sair da Conta"):
@@ -106,9 +118,7 @@ else:
         
         if st.button("🏷️ Gerar PIX de R$ 12,00"):
             url_mp = "https://api.mercadopago.com/v1/payments"
-            
-            # Gerando chave única de idempotência com base no e-mail e tempo atual
-            chave_unica = f"{email_usuario}-{int(time.time())}"
+            chave_unica = f"user-{int(time.time())}"
             
             headers = {
                 "Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}",
@@ -116,8 +126,7 @@ else:
                 "X-Idempotency-Key": chave_unica
             }
             
-            # Tratamento para garantir formato de e-mail válido aceito pelo Mercado Pago
-            email_valido_mp = email_usuario if "@" in email_usuario else f"{email_usuario}@email.com"
+            email_valido_mp = email_usuario if "@" in email_usuario else f"{email_usuario}@telefone.com"
             
             dados_pagamento = {
                 "transaction_amount": 12.00,
@@ -150,7 +159,7 @@ else:
                 url_checa = f"https://api.mercadopago.com/v1/payments/{id_pagamento}"
                 headers = {"Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}"}
                 
-                with st.spinner("Buscando confirmation do seu banco..."):
+                with st.spinner("Buscando confirmação do seu banco..."):
                     pago = False
                     for _ in range(5):
                         try:
@@ -181,12 +190,10 @@ else:
         if uploaded_file is not None:
             nome_do_arquivo = uploaded_file.name
             
-            # 🕵️‍♂️ INTELIGÊNCIA ANTIFRAUDE: Lê o título do arquivo, limpa datas, espaços e parênteses
-            nome_limpo = re.sub(r'^[\d-------_\s]+', '', nome_do_arquivo)
+            nome_limpo = re.sub(r'^[\d\-_\s]+', '', nome_do_arquivo)
             nome_limpo = re.sub(r'\s*\([^)]*\)', '', nome_limpo)
             nome_motorista = nome_limpo.replace(".xlsx", "").strip().upper()
             
-            # BLOQUEIO: Se o motorista tenta usar bônus gratuito (total_pago <= 0) mas o nome dele já usou o bônus antes
             if total_pago <= 0 and nome_motorista in motoristas_bloqueados:
                 st.error(f"❌ Erro de Validação: O motorista '{nome_motorista}' já utilizou o bônus de 2 rotas gratuitas em outra conta. Para processar este arquivo, utilize sua conta original ou adquira rotas pagas via PIX.")
             else:
@@ -230,7 +237,9 @@ else:
                     file_name="rota_corrigida.csv",
                     mime="text/csv"
                 ):
-                    # Se for o uso do bônus em conta gratuita, adiciona o nome do motorista na lista de bloqueados
+                    # EXIBE A MENSAGEM PERSONALIZADA RESPONSIVA NO TOQUE DO CLICK
+                    st.success(f"🎉 Rota liberada com sucesso! Boa viagem e ótimas entregas, {nome_motorista}! 🚀")
+                    
                     if total_pago <= 0 and nome_motorista not in motoristas_bloqueados:
                         motoristas_bloqueados.append(nome_motorista)
                         banco["motoristas_bloqueados"] = motoristas_bloqueados
@@ -239,4 +248,5 @@ else:
                     banco["usuarios"] = usuarios
                     
                     salvar_banco(banco)
+                    time.sleep(2.5) # Tempo essencial para o motorista ler o balão de sucesso no celular
                     st.rerun()
