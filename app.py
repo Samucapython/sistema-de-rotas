@@ -194,7 +194,8 @@ else:
             nome_limpo = re.sub(r'\s*\([^)]*\)', '', nome_limpo)
             nome_motorista = nome_limpo.replace(".xlsx", "").strip().upper()
             
-            if total_pago <= 0 and nome_motorista in motoristas_bloqueados:
+            # MUDANÇA DA TRAVA AQUI: Agora só gera erro vermelho se o motorista estiver bloqueado E os créditos dele chegarem a zero em uma conta grátis.
+            if total_pago <= 0 and creditos_atuais <= 0 and nome_motorista in motoristas_bloqueados:
                 st.error(f"❌ Erro de Validação: O motorista '{nome_motorista}' já utilizou o bônus de 2 rotas gratuitas em outra conta. Para processar este arquivo, utilize sua conta original ou adquira rotas pagas via PIX.")
             else:
                 df = pd.read_excel(uploaded_file, keep_default_na=False)
@@ -237,7 +238,6 @@ else:
                     file_name="rota_corrigida.csv",
                     mime="text/csv"
                 ):
-                    # EXIBE A MENSAGEM PERSONALIZADA RESPONSIVA NO TOQUE DO CLICK
                     st.success(f"🎉 Rota liberada com sucesso! Boa viagem e ótimas entregas, {nome_motorista}! 🚀")
                     
                     if total_pago <= 0 and nome_motorista not in motoristas_bloqueados:
@@ -248,5 +248,5 @@ else:
                     banco["usuarios"] = usuarios
                     
                     salvar_banco(banco)
-                    time.sleep(2.5) # Tempo essencial para o motorista ler o balão de sucesso no celular
+                    time.sleep(2.5) 
                     st.rerun()
