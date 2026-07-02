@@ -4,6 +4,7 @@ import requests
 import json
 import re
 import time
+from urllib.parse import quote
 
 # =========================================================================
 # CONFIGURAÇÕES IMPORTANTES
@@ -14,7 +15,6 @@ URL_SALVAR_DRIVE = "https://script.google.com/macros/s/AKfycbxnp5XBcUb3eWgY4gMgV
 
 URL_DOWNLOAD = f"https://docs.google.com/uc?export=download&id={ID_DO_ARQUIVO_DRIVE}"
 
-# Funções do Banco de Dados Adaptadas para Estrutura Dupla (Usuários + Bloqueados)
 def carregar_banco():
     try:
         url_sem_cache = f"{URL_DOWNLOAD}&nocache={int(time.time())}"
@@ -36,7 +36,6 @@ def salvar_banco(dados):
     except:
         pass
 
-# Inicializar variáveis na memória do navegador do motorista
 if "logado" not in st.session_state:
     st.session_state.logado = False
     st.session_state.usuario_atual = None
@@ -46,6 +45,32 @@ if "logado" not in st.session_state:
 banco = st.session_state.banco_completo
 usuarios = banco["usuarios"]
 motoristas_bloqueados = banco["motoristas_bloqueados"]
+
+# --- FUNÇÃO INTELIGENTE DE CONSULTA AO MAPA (OPENSTREETMAP) ---
+def consultar_coordenadas_internet(endereco_texto, cidade="São Paulo"):
+    """Consulta a internet para obter a localização física real do endereço sem complementos"""
+    try:
+        # Pega de forma limpa apenas até o primeiro número após a vírgula (Rua X, 123)
+        busca_padrao = re.search(r'^([^,]+,\s*\d+)', endereco_texto)
+        if busca_padrao:
+            query_busca = f"{busca_padrao.group(1)}, {cidade}, Brazil"
+        else:
+            query_busca = f"{endereco_texto}, {cidade}, Brazil"
+            
+        url = f"https://nominatim.openstreetmap.org/search?q={quote(query_busca)}&format=json&limit=1"
+        # User-Agent obrigatório exigido pelos termos da API do OpenStreetMap para evitar bloqueios
+        headers = {"User-Agent": "CorretorRotasSPXTN/2.0 (suporte_sistema@provedor.com)"}
+        
+        resposta = requests.get(url, headers=headers, timeout=3)
+        if resposta.status_code == 200 and len(resposta.json()) > 0:
+            dados = response_data = resposta.json()[0]
+            # Arredonda para 4 casas decimais para unificar condomínios e prédios de entrada dupla
+            lat = round(float(dados["lat"]), 4)
+            lon = round(float(dados["lon"]), 4)
+            return f"{lat}_{lon}"
+    except:
+        pass
+    return None
 
 # ----------------- TELA DE LOGIN / CADASTRO -----------------
 if not st.session_state.logado:
@@ -211,51 +236,83 @@ else:
                         return texto
                     df["Destination Address"] = df["Destination Address"].apply(limpar_ruas)
                     
-                    # Extrai de forma limpa apenas "Nome da Rua, Numero" para evitar divisões por salas/apartamentos
-                    def extrair_endereco_base(texto):
-                        padrao = r'^([^,]+,\s*\d+)'
-                        busca = re.search(padrao, texto)
-                        if busca:
-                            return busca.group(1).strip().upper()
-                        return texto.strip().upper()
-
-                    df['Endereco_Base'] = df["Destination Address"].apply(extrair_endereco_base)
+                    # Detecta a cidade dominante da planilha de forma dinâmica
+                    cidade_detectada = "São Paulo"
+                    if "City" in df.columns and len(df["City"]) > 0:
+                        cidade_detectada = df["City"].iloc[0]
                     
-                    # Arredonda as coordenadas para 4 casas decimais para agrupar prédios de numeração dupla na mesma coordenada física
-                    df['Lat_Arredondada'] = pd.to_numeric(df['Latitude'], errors='coerce').round(4).astype(str)
-                    df['Lon_Arredondada'] = pd.to_numeric(df['Longitude'], errors='coerce').round(4).astype(str)
+                    # --- PROCESSAMENTO INTELIGENTE DA INTERNET ---
+                    st.info("🗺️ **Inteligência Geográfica:** Consultando mapa digital em tempo real para unificar condomínios e numerações duplas...")
+                    barra_progresso = st.progress(0)
+                    status_texto = st.empty()
                     
-                    # Criação da Chave Base de Agrupamento
-                    df['Chave_Endereco'] = df['Endereco_Base'].astype(str) + "_" + df['Lat_Arredondada'] + "_" + df['Lon_Arredondada']
+                    enderecos_unicos = df["Destination Address"].unique()
+                    total_enderecos = len(enderecos_unicos)
+                    mapa_coordenadas_reais = {}
                     
+                    for idx, endereco in enumerate(enderecos_unicos):
+                        status_texto.write(f"Analisando local {idx+1} de {total_enderecos}...")
+                        barra_progresso.progress((idx + 1) / total_enderecos)
+                        
+                        # Consulta a localização real no OpenStreetMap
+                        chave_fisica = consultar_coordenadas_internet(endereco, cidade=cidade_detectada)
+                        
+                        # [REDE DE SEGURANÇA] Se a internet falhar ou não achar, usa a coordenada da SPX corrigida
+                        if not chave_fisica:
+                            linha_original = df[df["Destination Address"] == endereco].iloc[0]
+                            try:
+                                lat_seg = str(round(float(linha_original['Latitude']), 4))
+                                lon_seg = str(round(float(linha_original['Longitude']), 4))
+                                chave_fisica = f"{lat_seg}_{lon_seg}"
+                            except:
+                                chave_fisica = "LOCAL_SEM_MAPA"
+                                
+                        mapa_coordenadas_reais[endereco] = chave_fisica
+                        time.sleep(1) # Intervalo respeitoso exigido pelo OpenStreetMap
+                        
+                    barra_progresso.empty()
+                    status_texto.empty()
+                    
+                    # Associa as chaves geográficas encontradas de volta ao DataFrame principal
+                    df['Chave_Fisica_Real'] = df["Destination Address"].map(mapa_coordenadas_reais)
+                    
+                    # --- ATRIBUIÇÃO SEQUENCIAL DOS STOPS ---
                     nova_parada = 1
                     lista_novas_paradas = []
-                    enderecos_vistos = {}
+                    locais_vistos = {}
                     
-                    for id_endereco in df['Chave_Endereco']:
-                        if id_endereco not in enderecos_vistos:
-                            enderecos_vistos[id_endereco] = nova_parada
+                    for id_fisico in df['Chave_Fisica_Real']:
+                        if id_fisico not in locais_vistos:
+                            locais_vistos[id_fisico] = nova_parada
                             nova_parada += 1
-                        lista_novas_paradas.append(enderecos_vistos[id_endereco])
+                        lista_novas_paradas.append(locais_vistos[id_fisico])
                     
                     df['Stop'] = lista_novas_paradas
                     
-                    st.success("✨ Seu arquivo foi corrigido e as paradas foram unificadas por endereço físico!")
+                    st.success("✨ Seu arquivo foi corrigido e as paradas foram agrupadas geograficamente!")
                     
-                    # --- BLOCO EXCLUSIVO: ALERTA DE MÚLTIPLOS PEDIDOS ---
-                    st.subheader("📦 Alerta de Grandes Volumes (Mesmo Endereço):")
-                    contagem = df.groupby(['Endereco_Base', 'Stop']).size().reset_index(name='Qtd')
+                    # --- BLOCO DE ALERTA DE GRANDES VOLUMES NO MESMO LOCAL ---
+                    st.subheader("📦 Alerta de Grandes Volumes (Mesmo Local):")
+                    
+                    def extrair_texto_exibicao(texto):
+                        padrao = r'^([^,]+,\s*\d+)'
+                        busca = re.search(padrao, texto)
+                        return busca.group(1).strip().upper() if busca else texto.strip().upper()
+                        
+                    df['End_Tela'] = df["Destination Address"].apply(extrair_texto_exibicao)
+                    
+                    contagem = df.groupby(['Chave_Fisica_Real', 'Stop']).agg({'End_Tela': 'first', 'Sequence': 'count'}).reset_index()
+                    contagem.rename(columns={'Sequence': 'Qtd'}, inplace=True)
                     multiplos = contagem[contagem['Qtd'] > 1].sort_values(by='Qtd', ascending=False)
                     
                     if not multiplos.empty:
                         for _, row in multiplos.iterrows():
-                            st.info(f"📍 **Stop {row['Stop']}** — {row['Endereco_Base']}: possui **{row['Qtd']} pacotes** neste local!")
+                            st.info(f"📍 **Stop {row['Stop']}** — {row['End_Tela']}: possui **{row['Qtd']} pacotes** unificados nesta mesma parada física!")
                     else:
-                        st.write("Nenhum endereço com múltiplos pacotes hoje. Todas as entregas são individuais.")
-                    # ---------------------------------------------------
+                        st.write("Todas as entregas de hoje são em locais individuais.")
                     
-                    # Remove as colunas auxiliares antes de entregar o arquivo final limpo
-                    df = df.drop(columns=['Chave_Endereco', 'Endereco_Base', 'Lat_Arredondada', 'Lon_Arredondada'])
+                    # Remove as colunas de controle interno para entregar o arquivo limpo
+                    df = df.drop(columns=['Chave_Fisica_Real', 'End_Tela'])
                 
                 csv_corrigido = df.to_csv(index=False).encode('utf-8')
                 
