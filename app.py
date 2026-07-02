@@ -56,7 +56,6 @@ if not st.session_state.logado:
         usuario_input = st.text_input("E-mail ou Telefone (com DDD)")
         senha = st.text_input("Senha para Login", type="password")
         if st.button("Entrar"):
-            # Limpa o input caso o usuário coloque traços ou espaços no telefone
             usuario_limpo = usuario_input.strip()
             if usuario_limpo in usuarios and usuarios[usuario_limpo]["senha"] == senha:
                 st.session_state.logado = True
@@ -87,7 +86,6 @@ if not st.session_state.logado:
             elif opcao_cadastro == "Usar Telefone/WhatsApp" and not usuario_final.isdigit():
                 st.error("Por favor, digite apenas números no campo de telefone.")
             else:
-                # Salva o usuário no formato unificado
                 usuarios[usuario_final] = {"senha": nova_senha, "creditos": 2, "total_pago": 0}
                 banco["usuarios"] = usuarios
                 salvar_banco(banco)
@@ -194,7 +192,6 @@ else:
             nome_limpo = re.sub(r'\s*\([^)]*\)', '', nome_limpo)
             nome_motorista = nome_limpo.replace(".xlsx", "").strip().upper()
             
-            # MUDANÇA DA TRAVA AQUI: Agora só gera erro vermelho se o motorista estiver bloqueado E os créditos dele chegarem a zero em uma conta grátis.
             if total_pago <= 0 and creditos_atuais <= 0 and nome_motorista in motoristas_bloqueados:
                 st.error(f"❌ Erro de Validação: O motorista '{nome_motorista}' já utilizou o bônus de 2 rotas gratuitas em outra conta. Para processar este arquivo, utilize sua conta original ou adquira rotas pagas via PIX.")
             else:
@@ -214,7 +211,22 @@ else:
                         return texto
                     df["Destination Address"] = df["Destination Address"].apply(limpar_ruas)
                     
-                    df['Chave_Endereco'] = df['Destination Address'].astype(str) + "_" + df['Latitude'].astype(str) + "_" + df['Longitude'].astype(str)
+                    # Extrai de forma limpa apenas "Nome da Rua, Numero" para evitar divisões por salas/apartamentos
+                    def extrair_endereco_base(texto):
+                        padrao = r'^([^,]+,\s*\d+)'
+                        busca = re.search(padrao, texto)
+                        if busca:
+                            return busca.group(1).strip().upper()
+                        return texto.strip().upper()
+
+                    df['Endereco_Base'] = df["Destination Address"].apply(extrair_endereco_base)
+                    
+                    # Arredonda as coordenadas para 4 casas decimais para agrupar prédios de numeração dupla na mesma coordenada física
+                    df['Lat_Arredondada'] = pd.to_numeric(df['Latitude'], errors='coerce').round(4).astype(str)
+                    df['Lon_Arredondada'] = pd.to_numeric(df['Longitude'], errors='coerce').round(4).astype(str)
+                    
+                    # Criação da Chave Base de Agrupamento
+                    df['Chave_Endereco'] = df['Endereco_Base'].astype(str) + "_" + df['Lat_Arredondada'] + "_" + df['Lon_Arredondada']
                     
                     nova_parada = 1
                     lista_novas_paradas = []
@@ -227,9 +239,24 @@ else:
                         lista_novas_paradas.append(enderecos_vistos[id_endereco])
                     
                     df['Stop'] = lista_novas_paradas
-                    df = df.drop(columns=['Chave_Endereco'])
+                    
+                    st.success("✨ Seu arquivo foi corrigido e as paradas foram unificadas por endereço físico!")
+                    
+                    # --- BLOCO EXCLUSIVO: ALERTA DE MÚLTIPLOS PEDIDOS ---
+                    st.subheader("📦 Alerta de Grandes Volumes (Mesmo Endereço):")
+                    contagem = df.groupby(['Endereco_Base', 'Stop']).size().reset_index(name='Qtd')
+                    multiplos = contagem[contagem['Qtd'] > 1].sort_values(by='Qtd', ascending=False)
+                    
+                    if not multiplos.empty:
+                        for _, row in multiplos.iterrows():
+                            st.info(f"📍 **Stop {row['Stop']}** — {row['Endereco_Base']}: possui **{row['Qtd']} pacotes** neste local!")
+                    else:
+                        st.write("Nenhum endereço com múltiplos pacotes hoje. Todas as entregas são individuais.")
+                    # ---------------------------------------------------
+                    
+                    # Remove as colunas auxiliares antes de entregar o arquivo final limpo
+                    df = df.drop(columns=['Chave_Endereco', 'Endereco_Base', 'Lat_Arredondada', 'Lon_Arredondada'])
                 
-                st.success("✨ Seu arquivo foi corrigido e as paradas foram individualizadas por casa!")
                 csv_corrigido = df.to_csv(index=False).encode('utf-8')
                 
                 if st.download_button(
